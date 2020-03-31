@@ -67,9 +67,16 @@ module_param(ejectcd_as_delete, uint, 0644);
 MODULE_PARM_DESC(ejectcd_as_delete, "Use Eject-CD key as Delete key. "
 		"([0] = disabled, 1 = enabled)");
 
+
+static unsigned int command_arrows;
+module_param(command_arrows, uint, 0644);
+MODULE_PARM_DESC(command_arrows, "Use RightCommand+[h/j/k/l] or RightCommand+[j/i/k/l] as arrow keys. Fn+Arrows will continue to have the same meaning of Home/PgUp/PgDown/End. "
+		"([0] = disabled. 1 = RightCommand+[h/j/k/l] is Left/Down/Up/Right, 2 = RightCommand+[j/i/k/l] is Left/Up/Down/End)");
+
 struct apple_sc {
 	unsigned long quirks;
 	unsigned int fn_on;
+	unsigned int rcommand_on;
 	DECLARE_BITMAP(pressed_numlock, KEY_CNT);
 };
 
@@ -193,6 +200,22 @@ static const struct apple_key_translation ejectcd_as_delete_keys[] = {
 	{ }
 };
 
+static const struct apple_key_translation fn_hjkl_as_arrows_keys[] = {
+	{ KEY_H,	KEY_LEFT },
+	{ KEY_J,	KEY_DOWN },
+	{ KEY_K,	KEY_UP },
+	{ KEY_L,	KEY_RIGHT },
+	{ }
+};
+
+static const struct apple_key_translation fn_jikl_as_arrows_keys[] = {
+	{ KEY_J,	KEY_LEFT },
+	{ KEY_I,	KEY_UP },
+	{ KEY_K,	KEY_DOWN },
+	{ KEY_L,	KEY_RIGHT },
+	{ }
+};
+
 static const struct apple_key_translation *apple_find_translation(
 		const struct apple_key_translation *table, u16 from)
 {
@@ -222,6 +245,32 @@ static int hidinput_apple_event(struct hid_device *hid, struct input_dev *input,
 		return 1;
 	}
 
+	if (usage->code == KEY_RIGHTMETA) {
+		asc->rcommand_on = !!value;
+		input_event(input, usage->type, KEY_RIGHTMETA, value);
+		return 1;
+	}
+
+	if (command_arrows) {
+		table = (command_arrows == 1) ? (fn_hjkl_as_arrows_keys) : (fn_jikl_as_arrows_keys);
+		trans = apple_find_translation (table, usage->code);
+		if (trans) {
+			// if (test_bit(trans->from, input->key))
+			// 	// If we're already pressing the key (such as before Fn was pressed)
+			// 	// then continue pressing it
+			// 	code = trans->from;
+			// else if (test_bit(trans->to, input->key))
+			// 	// Continue pressing the key if Fn is released
+			// 	code = trans->to;
+			// else {
+				do_translate = asc->rcommand_on;
+				code = do_translate ? trans->to : trans->from;
+			// }
+			input_event(input, usage->type, trans->to, value);
+			return 1;
+		}
+	}
+
 	if (fnmode) {
 		if (hid->product >= USB_DEVICE_ID_APPLE_WELLSPRING4_ANSI &&
 				hid->product <= USB_DEVICE_ID_APPLE_WELLSPRING4A_JIS)
@@ -235,11 +284,13 @@ static int hidinput_apple_event(struct hid_device *hid, struct input_dev *input,
 
 		if (trans) {
 			if (test_bit(trans->from, input->key))
+				// If we're already pressing the key (such as before Fn was pressed)
+				// then continue pressing it
 				code = trans->from;
 			else if (test_bit(trans->to, input->key))
+				// Continue pressing the key if Fn is released
 				code = trans->to;
-
-			if (!code) {
+			else {
 				if (trans->flags & APPLE_FLAG_FKEY) {
 					switch (fnmode) {
 					case 1:
@@ -401,7 +452,7 @@ static void apple_setup_input(struct input_dev *input)
 			set_bit(trans->to, input->keybit);
 	}
 
-        if (rightalt_as_rightctrl) {
+	if (rightalt_as_rightctrl) {
 		for (trans = rightalt_as_rightctrl_keys; trans->from; trans++)
 			set_bit(trans->to, input->keybit);
 	}
